@@ -263,6 +263,7 @@ func (n *Node) DataType() *ua.ExpandedNodeID {
 		log.Printf("n was nil!")
 		return ua.NewTwoByteExpandedNodeID(0)
 	}
+
 	v := n.attr[ua.AttributeIDDataType]
 	if v == nil || v.Value.Value() == nil {
 		// if we have a type definition, return that?
@@ -277,7 +278,20 @@ func (n *Node) DataType() *ua.ExpandedNodeID {
 		}
 		return ua.NewTwoByteExpandedNodeID(0)
 	}
-	return v.Value.Value().(*ua.ExpandedNodeID)
+
+	dataType := v.Value.Value()
+
+	switch dt := dataType.(type) {
+	case *ua.ExpandedNodeID:
+		return dt
+
+	case *ua.NodeID:
+		return ua.NewExpandedNodeID(dt, "", 0)
+
+	default:
+		log.Printf("unexpected DataType attribute type: %T", dataType)
+		return ua.NewTwoByteExpandedNodeID(0)
+	}
 }
 
 func (n *Node) SetNodeClass(nc ua.NodeClass) {
