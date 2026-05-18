@@ -21,13 +21,29 @@ func CurrentTimeNode() *Node {
 }
 
 func NamespacesNode(s *Server) *Node {
+	propertyTypeID := ua.NewNumericExpandedNodeID(0, id.PropertyType)
 	return NewNode(
 		ua.NewNumericNodeID(0, id.Server_NamespaceArray),
 		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName: DataValueFromValue(attrs.BrowseName("Namespaces")),
-			ua.AttributeIDNodeClass:  DataValueFromValue(uint32(ua.NodeClassObject)),
+			ua.AttributeIDBrowseName:      DataValueFromValue(attrs.BrowseName("NamespaceArray")),
+			ua.AttributeIDDisplayName:     DataValueFromValue(attrs.DisplayName("NamespaceArray", "")),
+			ua.AttributeIDNodeClass:       DataValueFromValue(uint32(ua.NodeClassVariable)),
+			ua.AttributeIDDataType:        DataValueFromValue(ua.NewNumericNodeID(0, id.String)),
+			ua.AttributeIDValueRank:       DataValueFromValue(int32(1)),
+			ua.AttributeIDAccessLevel:     DataValueFromValue(byte(ua.AccessLevelTypeCurrentRead)),
+			ua.AttributeIDUserAccessLevel: DataValueFromValue(byte(ua.AccessLevelTypeCurrentRead)),
 		},
-		nil,
+		[]*ua.ReferenceDescription{
+			{
+				ReferenceTypeID: ua.NewNumericNodeID(0, id.HasTypeDefinition),
+				IsForward:       true,
+				NodeID:          propertyTypeID,
+				BrowseName:      attrs.BrowseName("PropertyType"),
+				DisplayName:     attrs.DisplayName("PropertyType", ""),
+				NodeClass:       ua.NodeClassVariableType,
+				TypeDefinition:  propertyTypeID,
+			},
+		},
 		func() *ua.DataValue {
 			n := s.Namespaces()
 			ns := make([]string, len(n))
