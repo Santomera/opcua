@@ -20,18 +20,46 @@ func CurrentTimeNode() *Node {
 	)
 }
 
+func namespaceArrayValueFunc(s *Server) ValueFunc {
+	return func() *ua.DataValue {
+		names := s.Namespaces()
+		ns := make([]string, len(names))
+		for i := range names {
+			ns[i] = names[i].Name()
+		}
+		return DataValueFromValue(ns)
+	}
+}
+
+// patchRuntimeServerNodes wires live Value providers onto standard Server
+// variables already imported from NodeSet2. Calling AddNode with a sparse
+// replacement drops mandatory attributes (Historizing, ArrayDimensions, etc.)
+// and strict clients flag BadAttributeIdInvalid.
+func patchRuntimeServerNodes(s *Server, ns *NodeNameSpace) {
+	if n := ns.Node(ua.NewNumericNodeID(0, id.Server_NamespaceArray)); n != nil {
+		n.SetValueFunc(namespaceArrayValueFunc(s))
+		return
+	}
+	ns.AddNode(NamespacesNode(s))
+}
+
 func NamespacesNode(s *Server) *Node {
 	propertyTypeID := ua.NewNumericExpandedNodeID(0, id.PropertyType)
+	access := byte(ua.AccessLevelTypeCurrentRead)
 	return NewNode(
 		ua.NewNumericNodeID(0, id.Server_NamespaceArray),
 		map[ua.AttributeID]*ua.DataValue{
-			ua.AttributeIDBrowseName:      DataValueFromValue(attrs.BrowseName("NamespaceArray")),
-			ua.AttributeIDDisplayName:     DataValueFromValue(attrs.DisplayName("NamespaceArray", "")),
-			ua.AttributeIDNodeClass:       DataValueFromValue(uint32(ua.NodeClassVariable)),
-			ua.AttributeIDDataType:        DataValueFromValue(ua.NewNumericNodeID(0, id.String)),
-			ua.AttributeIDValueRank:       DataValueFromValue(int32(1)),
-			ua.AttributeIDAccessLevel:     DataValueFromValue(byte(ua.AccessLevelTypeCurrentRead)),
-			ua.AttributeIDUserAccessLevel: DataValueFromValue(byte(ua.AccessLevelTypeCurrentRead)),
+			ua.AttributeIDBrowseName:              DataValueFromValue(attrs.BrowseName("NamespaceArray")),
+			ua.AttributeIDDisplayName:             DataValueFromValue(attrs.DisplayName("NamespaceArray", "")),
+			ua.AttributeIDNodeClass:               DataValueFromValue(uint32(ua.NodeClassVariable)),
+			ua.AttributeIDDataType:                DataValueFromValue(ua.NewNumericNodeID(0, id.String)),
+			ua.AttributeIDValueRank:               DataValueFromValue(int32(1)),
+			ua.AttributeIDArrayDimensions:         DataValueFromValue([]uint32{0}),
+			ua.AttributeIDAccessLevel:             DataValueFromValue(access),
+			ua.AttributeIDUserAccessLevel:         DataValueFromValue(access),
+			ua.AttributeIDAccessLevelEx:           DataValueFromValue(uint32(access)),
+			ua.AttributeIDMinimumSamplingInterval: DataValueFromValue(float64(1000)),
+			ua.AttributeIDHistorizing:             DataValueFromValue(false),
 		},
 		[]*ua.ReferenceDescription{
 			{
@@ -44,14 +72,7 @@ func NamespacesNode(s *Server) *Node {
 				TypeDefinition:  propertyTypeID,
 			},
 		},
-		func() *ua.DataValue {
-			n := s.Namespaces()
-			ns := make([]string, len(n))
-			for i := range ns {
-				ns[i] = n[i].Name()
-			}
-			return DataValueFromValue(ns)
-		},
+		namespaceArrayValueFunc(s),
 	)
 }
 

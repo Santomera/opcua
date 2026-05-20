@@ -201,6 +201,11 @@ func (n *Node) Attribute(id ua.AttributeID) (*AttrValue, error) {
 		return nil, ua.StatusBadAttributeIDInvalid
 	}
 }
+// SetValueFunc replaces the dynamic Value provider for Variable nodes.
+func (n *Node) SetValueFunc(vf ValueFunc) {
+	n.val = vf
+}
+
 func (n *Node) SetAttribute(id ua.AttributeID, val *ua.DataValue) error {
 	switch {
 	case id == ua.AttributeIDValue:
