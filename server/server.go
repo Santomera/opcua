@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/schema"
 	"github.com/gopcua/opcua/ua"
 	"github.com/gopcua/opcua/uacp"
@@ -157,14 +156,7 @@ func New(opts ...Option) *Server {
 	}
 	s.ImportNodeSet(&nodes)
 
-	s.namespaces[0].AddNode(CurrentTimeNode())
 	patchRuntimeServerNodes(s, n0)
-	for _, n := range ServerStatusNodes(s, s.namespaces[0].Node(ua.NewNumericNodeID(0, id.Server))) {
-		s.namespaces[0].AddNode(n)
-	}
-	for _, n := range ServerCapabilitiesNodes(s) {
-		s.namespaces[0].AddNode(n)
-	}
 
 	return s
 }

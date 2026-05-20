@@ -172,7 +172,33 @@ func (s *ViewService) RegisterNodes(sc *uasc.SecureChannel, r ua.Request, reqID 
 	if err != nil {
 		return nil, err
 	}
-	return serviceUnsupported(req.RequestHeader), nil
+
+	registered := make([]*ua.NodeID, len(req.NodesToRegister))
+	for i, nid := range req.NodesToRegister {
+		if nid == nil {
+			return &ua.RegisterNodesResponse{
+				ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusBadNodeIDUnknown),
+			}, nil
+		}
+		ns, err := s.srv.Namespace(int(nid.Namespace()))
+		if err != nil {
+			return &ua.RegisterNodesResponse{
+				ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusBadNodeIDUnknown),
+			}, nil
+		}
+		if ns.Node(nid) == nil {
+			return &ua.RegisterNodesResponse{
+				ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusBadNodeIDUnknown),
+			}, nil
+		}
+		// Alias registration: return the same NodeIds (no server-side remapping).
+		registered[i] = nid
+	}
+
+	return &ua.RegisterNodesResponse{
+		ResponseHeader:    responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
+		RegisteredNodeIDs: registered,
+	}, nil
 }
 
 // https://reference.opcfoundation.org/Core/Part4/v105/docs/5.8.6
@@ -185,5 +211,10 @@ func (s *ViewService) UnregisterNodes(sc *uasc.SecureChannel, r ua.Request, reqI
 	if err != nil {
 		return nil, err
 	}
-	return serviceUnsupported(req.RequestHeader), nil
+
+	// No server-side registry to clear; acknowledge the request.
+	_ = req
+	return &ua.UnregisterNodesResponse{
+		ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
+	}, nil
 }
