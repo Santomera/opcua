@@ -3,10 +3,137 @@ package server
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 
+	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/schema"
 	"github.com/gopcua/opcua/ua"
 )
+
+// nodesetAliases builds a map alias->NodeID string from the NodeSet aliases
+// table. It returns an empty map if the table is missing.
+func nodesetAliases(nodes *schema.UANodeSet) map[string]string {
+	out := make(map[string]string)
+	if nodes.Aliases == nil {
+		return out
+	}
+	for _, a := range nodes.Aliases.Alias {
+		if a == nil {
+			continue
+		}
+		out[a.AliasAttr] = a.Value
+	}
+	return out
+}
+
+// nodesetResolveDataType resolves a DataType reference from the NodeSet2 XML
+// (either a NodeId string like "i=12" or an alias name like "String") to a
+// concrete NodeID. Falls back to BaseDataType (i=24) when the value is empty
+// or cannot be resolved.
+func nodesetResolveDataType(value string, aliases map[string]string) *ua.NodeID {
+	if value == "" {
+		return ua.NewNumericNodeID(0, id.BaseDataType)
+	}
+	if real, ok := aliases[value]; ok && real != "" {
+		value = real
+	}
+	nid, err := ua.ParseNodeID(value)
+	if err != nil {
+		return ua.NewNumericNodeID(0, id.BaseDataType)
+	}
+	return nid
+}
+
+// nodesetParseArrayDimensions parses an "ArrayDimensions" XML attribute
+// (comma-separated unsigned integers like "0,0,0") into a slice of uint32.
+// Returns nil when empty or invalid so the caller can skip the attribute.
+func nodesetParseArrayDimensions(value string) []uint32 {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	dims := make([]uint32, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		v, err := strconv.ParseUint(p, 10, 32)
+		if err != nil {
+			return nil
+		}
+		dims = append(dims, uint32(v))
+	}
+	if len(dims) == 0 {
+		return nil
+	}
+	return dims
+}
+
+// nodesetZeroVariant returns a Variant holding the zero value (or an empty
+// slice for arrays) for the given OPC UA DataType. It allows the importer to
+// populate the mandatory Value attribute of Variable nodes with something
+// readable so strict clients (e.g. UA SDK NodeGetHandleList) don't reject the
+// node with BadAttributeIdInvalid. Falls back to int32(0) for unknown types.
+func nodesetZeroVariant(dtID *ua.NodeID, isArray bool) *ua.Variant {
+	if isArray {
+		switch dtID.IntID() {
+		case id.Boolean:
+			return ua.MustVariant([]bool{})
+		case id.SByte:
+			return ua.MustVariant([]int8{})
+		case id.Byte:
+			return ua.MustVariant(ua.ByteArray{})
+		case id.Int16:
+			return ua.MustVariant([]int16{})
+		case id.UInt16:
+			return ua.MustVariant([]uint16{})
+		case id.Int32:
+			return ua.MustVariant([]int32{})
+		case id.UInt32:
+			return ua.MustVariant([]uint32{})
+		case id.Int64:
+			return ua.MustVariant([]int64{})
+		case id.UInt64:
+			return ua.MustVariant([]uint64{})
+		case id.Float:
+			return ua.MustVariant([]float32{})
+		case id.Double:
+			return ua.MustVariant([]float64{})
+		case id.String:
+			return ua.MustVariant([]string{})
+		}
+		return ua.MustVariant([]int32{})
+	}
+	switch dtID.IntID() {
+	case id.Boolean:
+		return ua.MustVariant(false)
+	case id.SByte:
+		return ua.MustVariant(int8(0))
+	case id.Byte:
+		return ua.MustVariant(byte(0))
+	case id.Int16:
+		return ua.MustVariant(int16(0))
+	case id.UInt16:
+		return ua.MustVariant(uint16(0))
+	case id.Int32:
+		return ua.MustVariant(int32(0))
+	case id.UInt32:
+		return ua.MustVariant(uint32(0))
+	case id.Int64:
+		return ua.MustVariant(int64(0))
+	case id.UInt64:
+		return ua.MustVariant(uint64(0))
+	case id.Float:
+		return ua.MustVariant(float32(0))
+	case id.Double:
+		return ua.MustVariant(float64(0))
+	case id.String:
+		return ua.MustVariant("")
+	}
+	return ua.MustVariant(int32(0))
+}
 
 func (srv *Server) ImportNodeSet(nodes *schema.UANodeSet) error {
 	err := srv.namespacesImportNodeSet(nodes)
@@ -37,6 +164,10 @@ func (srv *Server) namespacesImportNodeSet(nodes *schema.UANodeSet) error {
 func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 
 	log.Printf("New Node Set: %s", nodes.LastModifiedAttr)
+
+	// Pre-compute alias -> NodeID map so we can resolve DataType references
+	// for variables/variable types declared with aliases in the XML.
+	aliases := nodesetAliases(nodes)
 
 	reftypes := make(map[string]*schema.UAReferenceType)
 
@@ -165,10 +296,25 @@ func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 			attrs[ua.AttributeIDDescription] = DataValueFromValue(ua.NewLocalizedText(ot.Description[0].Value))
 		}
 		attrs[ua.AttributeIDNodeClass] = DataValueFromValue(uint32(ua.NodeClassVariableType))
+		// Mandatory VariableType attributes per OPC UA spec.
+		attrs[ua.AttributeIDIsAbstract] = DataValueFromValue(ot.IsAbstractAttr)
+		vtDT := nodesetResolveDataType(ot.DataTypeAttr, aliases)
+		attrs[ua.AttributeIDDataType] = DataValueFromValue(vtDT)
+		attrs[ua.AttributeIDValueRank] = DataValueFromValue(int32(ot.ValueRankAttr))
+		if dims := nodesetParseArrayDimensions(ot.ArrayDimensionsAttr); dims != nil {
+			attrs[ua.AttributeIDArrayDimensions] = DataValueFromValue(dims)
+		}
 
 		var refs References = make([]*ua.ReferenceDescription, 0)
 
 		n := NewNode(nid, attrs, refs, nil)
+		// Value attribute is mandatory and is stored through the value func,
+		// not through the attrs map (see Node.Attribute). Populate a zero
+		// value matching the declared DataType / ValueRank.
+		_ = n.SetAttribute(ua.AttributeIDValue, &ua.DataValue{
+			EncodingMask: ua.DataValueValue,
+			Value:        nodesetZeroVariant(vtDT, ot.ValueRankAttr >= 1),
+		})
 		ns, err := srv.Namespace(int(nid.Namespace()))
 		if err != nil {
 			// This namespace doesn't exist.
@@ -196,10 +342,31 @@ func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 			attrs[ua.AttributeIDDescription] = DataValueFromValue(ua.NewLocalizedText(ot.Description[0].Value))
 		}
 		attrs[ua.AttributeIDNodeClass] = DataValueFromValue(uint32(ua.NodeClassVariable))
+		// Mandatory Variable attributes per OPC UA spec (Part 3, §5.6).
+		// Without these strict clients (UA SDK NodeGetHandleList, etc.) abort
+		// because reads return BadAttributeIdInvalid.
+		varDT := nodesetResolveDataType(ot.DataTypeAttr, aliases)
+		attrs[ua.AttributeIDDataType] = DataValueFromValue(varDT)
+		attrs[ua.AttributeIDValueRank] = DataValueFromValue(int32(ot.ValueRankAttr))
+		if dims := nodesetParseArrayDimensions(ot.ArrayDimensionsAttr); dims != nil {
+			attrs[ua.AttributeIDArrayDimensions] = DataValueFromValue(dims)
+		}
+		attrs[ua.AttributeIDAccessLevel] = DataValueFromValue(byte(ot.AccessLevelAttr))
+		attrs[ua.AttributeIDUserAccessLevel] = DataValueFromValue(byte(ot.UserAccessLevelAttr))
+		attrs[ua.AttributeIDAccessLevelEx] = DataValueFromValue(ot.AccessLevelAttr)
+		attrs[ua.AttributeIDMinimumSamplingInterval] = DataValueFromValue(ot.MinimumSamplingIntervalAttr)
+		attrs[ua.AttributeIDHistorizing] = DataValueFromValue(ot.HistorizingAttr)
 
 		var refs References = make([]*ua.ReferenceDescription, 0)
 
 		n := NewNode(nid, attrs, refs, nil)
+		// Value attribute is mandatory and is stored through the value func,
+		// not through the attrs map (see Node.Attribute). Populate a zero
+		// value matching the declared DataType / ValueRank.
+		_ = n.SetAttribute(ua.AttributeIDValue, &ua.DataValue{
+			EncodingMask: ua.DataValueValue,
+			Value:        nodesetZeroVariant(varDT, ot.ValueRankAttr >= 1),
+		})
 		ns, err := srv.Namespace(int(nid.Namespace()))
 		if err != nil {
 			// This namespace doesn't exist.
@@ -227,6 +394,9 @@ func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 			attrs[ua.AttributeIDDescription] = DataValueFromValue(ua.NewLocalizedText(ot.Description[0].Value))
 		}
 		attrs[ua.AttributeIDNodeClass] = DataValueFromValue(uint32(ua.NodeClassMethod))
+		// Mandatory Method attributes per OPC UA spec (Part 3, §5.7).
+		attrs[ua.AttributeIDExecutable] = DataValueFromValue(ot.ExecutableAttr)
+		attrs[ua.AttributeIDUserExecutable] = DataValueFromValue(ot.UserExecutableAttr)
 
 		var refs References = make([]*ua.ReferenceDescription, 0)
 
@@ -262,6 +432,8 @@ func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 		}
 
 		attrs[ua.AttributeIDNodeClass] = DataValueFromValue(uint32(ua.NodeClassObject))
+		// Mandatory Object attribute per OPC UA spec (Part 3, §5.5).
+		attrs[ua.AttributeIDEventNotifier] = DataValueFromValue(ot.EventNotifierAttr)
 
 		var refs References = make([]*ua.ReferenceDescription, 0)
 
@@ -269,6 +441,39 @@ func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 		ns, err := srv.Namespace(int(nid.Namespace()))
 		if err != nil {
 			// This namespace doesn't exist.
+			if srv.cfg.logger != nil {
+				srv.cfg.logger.Warn("Could Not Find Namespace %d", nid.Namespace())
+			}
+			return err
+		}
+		ns.AddNode(n)
+	}
+
+	// set up the views
+	for i := range nodes.UAView {
+		ot := nodes.UAView[i]
+		nid := ua.MustParseNodeID(ot.NodeIdAttr)
+		var attrs Attributes = make(map[ua.AttributeID]*ua.DataValue)
+		attrs[ua.AttributeIDAccessRestrictions] = DataValueFromValue(ot.AccessRestrictionsAttr)
+		attrs[ua.AttributeIDBrowseName] = DataValueFromValue(&ua.QualifiedName{NamespaceIndex: nid.Namespace(), Name: ot.BrowseNameAttr})
+		attrs[ua.AttributeIDUserWriteMask] = DataValueFromValue(ot.UserWriteMaskAttr)
+		attrs[ua.AttributeIDWriteMask] = DataValueFromValue(ot.WriteMaskAttr)
+		if len(ot.DisplayName) > 0 {
+			attrs[ua.AttributeIDDisplayName] = DataValueFromValue(ua.NewLocalizedText(ot.DisplayName[0].Value))
+		}
+		if len(ot.Description) > 0 {
+			attrs[ua.AttributeIDDescription] = DataValueFromValue(ua.NewLocalizedText(ot.Description[0].Value))
+		}
+		attrs[ua.AttributeIDNodeClass] = DataValueFromValue(uint32(ua.NodeClassView))
+		// Mandatory View attributes per OPC UA spec (Part 3, §5.8).
+		attrs[ua.AttributeIDContainsNoLoops] = DataValueFromValue(ot.ContainsNoLoopsAttr)
+		attrs[ua.AttributeIDEventNotifier] = DataValueFromValue(ot.EventNotifierAttr)
+
+		var refs References = make([]*ua.ReferenceDescription, 0)
+
+		n := NewNode(nid, attrs, refs, nil)
+		ns, err := srv.Namespace(int(nid.Namespace()))
+		if err != nil {
 			if srv.cfg.logger != nil {
 				srv.cfg.logger.Warn("Could Not Find Namespace %d", nid.Namespace())
 			}
@@ -552,6 +757,35 @@ func (srv *Server) refsImportNodeSet(nodes *schema.UANodeSet) error {
 
 		}
 
+	}
+
+	// set up the views
+	for i := range nodes.UAView {
+		ot := nodes.UAView[i]
+		nid := ua.MustParseNodeID(ot.NodeIdAttr)
+		node := srv.Node(nid)
+		if node == nil || ot.References == nil {
+			continue
+		}
+		for rid := range ot.References.Reference {
+			ref := ot.References.Reference[rid]
+			refnodeid := ua.MustParseNodeID(ref.Value)
+			n := srv.Node(refnodeid)
+			if n == nil {
+				log.Printf("can't find node %s as %s reference to %s", ref.Value, ref.ReferenceTypeAttr, ot.BrowseNameAttr)
+				failures++
+				continue
+			}
+			if ref.IsForwardAttr == nil {
+				v := true
+				ref.IsForwardAttr = &v
+			}
+			reftypeid := ua.MustParseNodeID(reftypes[ref.ReferenceTypeAttr].NodeIdAttr)
+			node.AddRef(n, RefType(reftypeid.IntID()), *ref.IsForwardAttr)
+			if !reftypes[ref.ReferenceTypeAttr].SymmetricAttr {
+				n.AddRef(node, RefType(reftypeid.IntID()), !*ref.IsForwardAttr)
+			}
+		}
 	}
 
 	return nil
