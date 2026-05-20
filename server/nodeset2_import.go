@@ -351,9 +351,24 @@ func (srv *Server) nodesImportNodeSet(nodes *schema.UANodeSet) error {
 		if dims := nodesetParseArrayDimensions(ot.ArrayDimensionsAttr); dims != nil {
 			attrs[ua.AttributeIDArrayDimensions] = DataValueFromValue(dims)
 		}
-		attrs[ua.AttributeIDAccessLevel] = DataValueFromValue(byte(ot.AccessLevelAttr))
-		attrs[ua.AttributeIDUserAccessLevel] = DataValueFromValue(byte(ot.UserAccessLevelAttr))
-		attrs[ua.AttributeIDAccessLevelEx] = DataValueFromValue(ot.AccessLevelAttr)
+		// AccessLevel default: most NodeSet2 entries omit the attribute (XML
+		// default uint32 == 0). A literal 0 would make Node.Access return
+		// false for CurrentRead and the server would answer every attribute
+		// read with BadUserAccessDenied. Fall back to CurrentRead so the
+		// nodes behave like before the importer started populating these
+		// attributes (where the missing attribute caused Access to return
+		// true by default).
+		accessLevel := byte(ot.AccessLevelAttr)
+		if accessLevel == 0 {
+			accessLevel = byte(ua.AccessLevelTypeCurrentRead)
+		}
+		userAccessLevel := byte(ot.UserAccessLevelAttr)
+		if userAccessLevel == 0 {
+			userAccessLevel = byte(ua.AccessLevelTypeCurrentRead)
+		}
+		attrs[ua.AttributeIDAccessLevel] = DataValueFromValue(accessLevel)
+		attrs[ua.AttributeIDUserAccessLevel] = DataValueFromValue(userAccessLevel)
+		attrs[ua.AttributeIDAccessLevelEx] = DataValueFromValue(uint32(accessLevel))
 		attrs[ua.AttributeIDMinimumSamplingInterval] = DataValueFromValue(ot.MinimumSamplingIntervalAttr)
 		attrs[ua.AttributeIDHistorizing] = DataValueFromValue(ot.HistorizingAttr)
 
